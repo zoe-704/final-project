@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-def preprocess_image(image_path, target_size=(224, 224)):
+def preprocess_image(image_path, target_size=(64, 64)):
     # 1. load image
     img = cv2.imread(image_path)
     # 2. resize
