@@ -8,8 +8,8 @@ def preprocess_image(image_path, target_size=(64, 64)):
 
     # 2. resize and
     img = cv2.resize(img, target_size)
-    
-    img = img.astype('float_32') / 255.0
+
+    img = img.astype('float32') / 255.0
 
     # 4. add channel dimension -> (1, H, W)
     img = np.expand_dims(img, axis=0)
@@ -17,3 +17,6 @@ def preprocess_image(image_path, target_size=(64, 64)):
     img = np.expand_dims(img, axis=0)
 
     return img
+
+img = preprocess_image("test.jpg")
+print(img.shape)
