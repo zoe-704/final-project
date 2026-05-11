@@ -1,8 +1,13 @@
-# img_preprocess
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+import pickle
+import random
 
+CLASS_NAMES = ["rock", "paper", "scissors"]
+
+# PREPROCESSING
 def preprocess_image(image_path, target_size=(64, 64)):
     # 1. load image
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -46,7 +51,7 @@ def conv2D(input, kernel, stride=1, padding=0):
 
 # make negative values 0 and introduce non-linearity
 def relu(x):
-    return np.maximum(0, x)
+    return np.where(x > 0, x, 0.01 * x)   # leaky relu — 0.01 slope for negatives
 
 # take max value in each block --> reduces computation
 def max_pooling(input, pool_size, stride):
@@ -142,10 +147,11 @@ def max_pooling_backward(dout, input, pool_size, stride):
 
 def relu_backward(dout, x):
     dx = dout.copy()
-    dx[x <= 0] = 0 # zero neg grad 
+    dx[x <= 0] *= 0.01 # pass 1% of gradient through dead neurons
     return dx
     
 def conv2D_backward(dout, input, kernel, stride=1, padding=0):
+
     batch_size, in_depth, in_height, in_width = input.shape
     out_channels, _, kH, kW = kernel.shape
     # same padding as forward pass
@@ -178,24 +184,253 @@ def conv2D_backward(dout, input, kernel, stride=1, padding=0):
     return dx, dk
 
 
-def predict(img, K, W, b):
-    # forward pass
-    conv_out = conv2D(img, K)
-    relu_out = relu(conv_out)
-    pool_out = max_pooling(relu_out, 2, 2) # max value in each 2x2 block
+def train_step(img, labels, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4, lr=0.01):
+    # forward
+    # conv block 1: (1,1,64,64) -> (1,8,32,32)
+    conv1_out = conv2D(img, K1, padding=1)
+    relu1_out = relu(conv1_out)
+    pool1_out = max_pooling(relu1_out, 2, 2)
+ 
+    # conv block 2: (1,8,32,32) -> (1,16,16,16)
+    conv2_out = conv2D(pool1_out, K2, padding=1)
+    relu2_out = relu(conv2_out)
+    pool2_out = max_pooling(relu2_out, 2, 2)
 
-    flat = flatten(pool_out)
-    logits = dense(flat, W, b)
+    # conv block 3: (1,16,16,16) -> (1,32,8,8)
+    conv3_out = conv2D(pool2_out, K3, padding=1)
+    relu3_out = relu(conv3_out)
+    pool3_out = max_pooling(relu3_out, 2, 2)
+
+    # conv block 4: (1,32,8,8) -> (1,64,4,4)
+    conv4_out = conv2D(pool3_out, K4, padding=1)
+    relu4_out = relu(conv4_out)
+    pool4_out = max_pooling(relu4_out, 2, 2)
+
+    # dense layers
+    pool4_shape = pool4_out.shape
+    flat = flatten(pool4_out) # (1, 1024)
+
+    dense1_out = dense(flat, W1, b1) # (1, 256)
+    drelu1_out = relu(dense1_out)
+
+    dense2_out = dense(drelu1_out, W2, b2) # (1, 128)
+    drelu2_out = relu(dense2_out)
+
+    dense3_out = dense(drelu2_out, W3, b3) # (1, 64)
+    drelu3_out = relu(dense3_out)
+
+    logits = dense(drelu3_out, W4, b4) # (1, 3)
+
+    pred = softmax(logits)
+    loss = cross_entropy(pred, labels)
+ 
+    # backward
+    # dense4 (output)
+    dlogits = softmax_cross_entropy_backward(pred, labels)
+    dW4, db4, ddrelu3 = dense_backward(dlogits, drelu3_out, W4)
+
+    # dense3
+    ddense3 = relu_backward(ddrelu3, dense3_out)
+    dW3, db3, ddrelu2 = dense_backward(ddense3, drelu2_out, W3)
+
+    # dense2
+    ddense2 = relu_backward(ddrelu2, dense2_out)
+    dW2, db2, ddrelu1 = dense_backward(ddense2, drelu1_out, W2)
+
+    # dense1
+    ddense1 = relu_backward(ddrelu1, dense1_out)
+    dW1, db1, dflat = dense_backward(ddense1, flat, W1)
+    
+    # unflatten -> conv block 4
+    dpool4 = flatten_backward(dflat, pool4_shape)
+    drelu4 = max_pooling_backward(dpool4, relu4_out, 2, 2)
+    dconv4 = relu_backward(drelu4, conv4_out)
+    dpool3, dK4 = conv2D_backward(dconv4, pool3_out, K4, padding=1)
+
+    # conv block 3
+    drelu3 = max_pooling_backward(dpool3, relu3_out, 2, 2)
+    dconv3 = relu_backward(drelu3, conv3_out)
+    dpool2, dK3 = conv2D_backward(dconv3, pool2_out, K3, padding=1)
+
+    # conv block 2
+    drelu2 = max_pooling_backward(dpool2, relu2_out, 2, 2)
+    dconv2 = relu_backward(drelu2, conv2_out)
+    dpool1, dK2 = conv2D_backward(dconv2, pool1_out, K2, padding=1)
+
+    # conv block 1
+    drelu1 = max_pooling_backward(dpool1, relu1_out, 2, 2)
+    dconv1 = relu_backward(drelu1, conv1_out)
+    _, dK1 = conv2D_backward(dconv1, img, K1, padding=1)
+
+    # update
+    # print(f"  dK1:{np.abs(dK1).mean():.5f} dK4:{np.abs(dK4).mean():.5f} dW1:{np.abs(dW1).mean():.5f} dW4:{np.abs(dW4).mean():.5f}")
+
+    clip = 5.0
+    dK1 = np.clip(dK1, -clip, clip);  dK2 = np.clip(dK2, -clip, clip)
+    dK3 = np.clip(dK3, -clip, clip);  dK4 = np.clip(dK4, -clip, clip)
+    dW1 = np.clip(dW1, -clip, clip);  dW2 = np.clip(dW2, -clip, clip)
+    dW3 = np.clip(dW3, -clip, clip);  dW4 = np.clip(dW4, -clip, clip)
+    db1 = np.clip(db1, -clip, clip);  db2 = np.clip(db2, -clip, clip)
+    db3 = np.clip(db3, -clip, clip);  db4 = np.clip(db4, -clip, clip)
+
+    K1 -= lr*dK1;  K2 -= lr*dK2;  K3 -= lr*dK3;  K4 -= lr*dK4
+    W1 -= lr*dW1;  W2 -= lr*dW2;  W3 -= lr*dW3;  W4 -= lr*dW4
+    b1 -= lr*db1;  b2 -= lr*db2;  b3 -= lr*db3;  b4 -= lr*db4
+
+    '''
+    K1 -= lr * dK1;  K2 -= lr * dK2;  K3 -= lr * dK3;  K4 -= lr * dK4
+    W1 -= lr * dW1;  W2 -= lr * dW2;  W3 -= lr * dW3;  W4 -= lr * dW4
+    b1 -= lr * db1;  b2 -= lr * db2;  b3 -= lr * db3;  b4 -= lr * db4
+    '''
+    return loss, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4
+
+
+def predict(img, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4):
+    conv1_out = conv2D(img, K1, padding=1)
+    pool1_out = max_pooling(relu(conv1_out), 2, 2)
+ 
+    conv2_out = conv2D(pool1_out, K2, padding=1)
+    pool2_out = max_pooling(relu(conv2_out), 2, 2)
+ 
+    conv3_out = conv2D(pool2_out, K3, padding=1)
+    pool3_out = max_pooling(relu(conv3_out), 2, 2)
+    
+    conv4_out = conv2D(pool3_out, K4, padding=1)
+    pool4_out = max_pooling(relu(conv4_out), 2, 2)
+
+    flat = flatten(pool4_out)
+    out = relu(dense(flat, W1, b1))
+    out = relu(dense(out, W2, b2))
+    out = relu(dense(out, W3, b3))
+    logits = dense(out, W4, b4)
+
     probs = softmax(logits)
 
     pred_class = np.argmax(probs, axis=1)
-    
     return pred_class, probs
 
+"""
+def load_dataset(folder):
+    images, labels = [], []
+    for label_idx, class_name in enumerate(CLASS_NAMES):
+        class_dir = os.path.join(folder, class_name)
+        if not os.path.exists(class_dir):
+            print(f"Warning: {class_dir} not found")
+            continue
+        for fname in sorted(os.listdir(class_dir)):
+            if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+                continue
+            img = preprocess_image(os.path.join(class_dir, fname))
+            images.append(img)
+            labels.append(label_idx)
+    print(f"  Loaded {len(images)} images from '{folder}'")
+    return images, np.array(labels)
+"""
 
-# test
-img = preprocess_image("test.jpg")
+# RANDOM SAMPLE
+def load_dataset(folder, samples_per_class=500):
+    images, labels = [], []
+    for label_idx, class_name in enumerate(CLASS_NAMES):
+        class_dir = os.path.join(folder, class_name)
+        if not os.path.exists(class_dir):
+            print(f"Warning: {class_dir} not found")
+            continue
 
+        all_files = [f for f in os.listdir(class_dir)
+                     if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        sampled = random.sample(all_files, min(samples_per_class, len(all_files)))
+
+        for fname in sampled:
+            images.append(preprocess_image(os.path.join(class_dir, fname)))
+            labels.append(label_idx)
+
+        print(f" {class_name}: sampled {len(sampled)}/{len(all_files)}")
+
+    return images, np.array(labels)
+
+def augment(img):
+    if np.random.rand() > 0.5:
+        img = img[:, :, :, ::-1] # horizontal flip
+    if np.random.rand() > 0.5:
+        img = img[:, :, ::-1, :] # vertical flip
+    img = img + np.random.uniform(-0.05, 0.05) # brightness
+    return np.clip(img, 0, 1)
+
+def train(train_folder, epochs=30, lr=0.001, resume=False):
+    # images, labels = load_dataset(train_folder)
+    if resume and os.path.exists("model.pkl"):
+        print("Resuming from model.pkl...")
+        K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = load_model()
+    else:
+        print("Starting fresh...")
+
+        # He initialization — scales weights to stop gradients vanishing in deep nets
+        K1 = np.random.randn(8, 1, 3, 3) * np.sqrt(2.0 / (1*9))
+        K2 = np.random.randn(16, 8, 3, 3) * np.sqrt(2.0 / (8*9))
+        K3 = np.random.randn(32, 16, 3, 3) * np.sqrt(2.0 / (16*9))
+        K4 = np.random.randn(64, 32, 3, 3) * np.sqrt(2.0 / (32*9))
+
+        W1 = np.random.randn(1024, 256) * np.sqrt(2.0 / 1024)
+        W2 = np.random.randn(256, 128) * np.sqrt(2.0 / 256)
+        W3 = np.random.randn(128, 64) * np.sqrt(2.0 / 128)
+        W4 = np.random.randn(64, 3) * np.sqrt(2.0 / 64)
+
+        b1 = np.zeros((1, 256))
+        b2 = np.zeros((1, 128))
+        b3 = np.zeros((1, 64))
+        b4 = np.zeros((1, 3))
+
+    for epoch in range(epochs):
+        images, labels = load_dataset(train_folder)
+        indices = np.random.permutation(len(images))  
+        total_loss = 0.0
+        for idx in indices:
+            # aug = augment(images[idx]) # flip around for more variation
+            loss, K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = train_step(
+                images[idx], np.array([labels[idx]]), K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4, lr=lr
+            )
+            total_loss += loss
+        print(f"epoch {epoch+1:02d}/{epochs} loss: {total_loss/len(images):.4f}")
+
+    save_model(K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4)
+    return K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4
+
+def evaluate(test_folder, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4):
+    images, labels = load_dataset(test_folder, samples_per_class=9999) # load all
+    correct = 0
+    class_correct = [0, 0, 0]
+    class_total = [0, 0, 0]
+
+    for img, true_label in zip(images, labels):
+        pred_class, _ = predict(img, K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4)
+        predicted = pred_class[0]
+        class_total[true_label] += 1
+        if pred_class[0] == true_label:
+            correct += 1
+            class_correct[true_label] += 1
+
+    print(f"\nOverall accuracy: {correct}/{len(images)} ({correct/len(images)*100:.1f}%)")
+    for i, name in enumerate(CLASS_NAMES):
+        if class_total[i] > 0:
+            print(f" {name:10s}: {class_correct[i]}/{class_total[i]} ({class_correct[i]/class_total[i]*100:.1f}%)")
+
+def save_model(K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4, path="model.pkl"):
+    with open(path, "wb") as f:
+        pickle.dump({"K1":K1,"K2":K2,"K3":K3,"K4":K4,
+                     "W1":W1,"W2":W2,"W3":W3,"W4":W4,
+                     "b1":b1,"b2":b2,"b3":b3,"b4":b4}, f)
+    print(f"Model saved to {path}")
+
+def load_model(path="model.pkl"):
+    with open(path, "rb") as f:
+        d = pickle.load(f)
+    return d["K1"],d["K2"],d["K3"],d["K4"],d["W1"],d["W2"],d["W3"],d["W4"],d["b1"],d["b2"],d["b3"],d["b4"]
+
+if __name__ == "__main__":
+    K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = train("train", epochs=30, lr=0.0005, resume=True)
+    evaluate("test", K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4)
+
+"""
 # conv kernel
 # 8 filters (8 dif features), 1 input channel (grayscale), 3x3 filter
 K = np.random.randn(8, 1, 3, 3) * 0. 
@@ -205,7 +440,7 @@ K = np.random.randn(8, 1, 3, 3) * 0.
 flatten_size = 8 * 31 * 31
  
 # dense
-W = np.random.randn(flatten_size, 10) * 0.1 # 7688 inputs → 10 output classes
+W = np.random.randn(flatten_size, 3) * 0.1 # 7688 inputs → 3 output classes
 b = np.zeros((1, 3)) # one bias per 3 class (rock, paper, scissors)
 
 pred, probs = predict(img, K, W, b)
@@ -217,3 +452,6 @@ plt.imshow(img[0, 0], cmap='gray')
 plt.title(f"Prediction: {pred[0]}")
 plt.axis('off')
 plt.show()
+"""
+
+
