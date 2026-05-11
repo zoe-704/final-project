@@ -1,2 +1,6 @@
 test/
 train/
+.DS_Store
+__pycache__/
+*.pyc
+*.pkl

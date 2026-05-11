@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import os
 import pickle
 import random
+import argparse
 
 CLASS_NAMES = ["rock", "paper", "scissors"]
 
@@ -277,11 +278,7 @@ def train_step(img, labels, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4, lr=0
     W1 -= lr*dW1;  W2 -= lr*dW2;  W3 -= lr*dW3;  W4 -= lr*dW4
     b1 -= lr*db1;  b2 -= lr*db2;  b3 -= lr*db3;  b4 -= lr*db4
 
-    '''
-    K1 -= lr * dK1;  K2 -= lr * dK2;  K3 -= lr * dK3;  K4 -= lr * dK4
-    W1 -= lr * dW1;  W2 -= lr * dW2;  W3 -= lr * dW3;  W4 -= lr * dW4
-    b1 -= lr * db1;  b2 -= lr * db2;  b3 -= lr * db3;  b4 -= lr * db4
-    '''
+
     return loss, K1, K2, K3, K4, W1, W2, W3, W4, b1, b2, b3, b4
 
 
@@ -328,7 +325,7 @@ def load_dataset(folder):
 """
 
 # RANDOM SAMPLE
-def load_dataset(folder, samples_per_class=500):
+def load_dataset(folder, samples_per_class=300):
     images, labels = [], []
     for label_idx, class_name in enumerate(CLASS_NAMES):
         class_dir = os.path.join(folder, class_name)
@@ -356,8 +353,7 @@ def augment(img):
     img = img + np.random.uniform(-0.05, 0.05) # brightness
     return np.clip(img, 0, 1)
 
-def train(train_folder, epochs=30, lr=0.001, resume=False):
-    # images, labels = load_dataset(train_folder)
+def train(train_folder, epochs=30, lr=0.001, resume=False, samples_per_class=300):
     if resume and os.path.exists("model.pkl"):
         print("Resuming from model.pkl...")
         K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = load_model()
@@ -381,7 +377,7 @@ def train(train_folder, epochs=30, lr=0.001, resume=False):
         b4 = np.zeros((1, 3))
 
     for epoch in range(epochs):
-        images, labels = load_dataset(train_folder)
+        images, labels = load_dataset(train_folder, samples_per_class)
         indices = np.random.permutation(len(images))  
         total_loss = 0.0
         for idx in indices:
@@ -427,31 +423,14 @@ def load_model(path="model.pkl"):
     return d["K1"],d["K2"],d["K3"],d["K4"],d["W1"],d["W2"],d["W3"],d["W4"],d["b1"],d["b2"],d["b3"],d["b4"]
 
 if __name__ == "__main__":
-    K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = train("train", epochs=30, lr=0.0005, resume=True)
+    parser = argparse.ArgumentParser(description="Train RPS classifier")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--resume", action="store_true")  # flag, no value needed
+    parser.add_argument("--samples_per_class", type=int, default=300)
+    args = parser.parse_args()
+
+    K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4 = train(
+        "train", epochs=args.epochs, lr=args.lr, resume=args.resume, samples_per_class=args.samples_per_class
+    )
     evaluate("test", K1,K2,K3,K4, W1,W2,W3,W4, b1,b2,b3,b4)
-
-"""
-# conv kernel
-# 8 filters (8 dif features), 1 input channel (grayscale), 3x3 filter
-K = np.random.randn(8, 1, 3, 3) * 0. 
-
-# after conv+pool --> (8, 31, 31)
-# 64×64 --> (3x3 conv) 62×62 --> (2×2 max pool) 31×31
-flatten_size = 8 * 31 * 31
- 
-# dense
-W = np.random.randn(flatten_size, 3) * 0.1 # 7688 inputs → 3 output classes
-b = np.zeros((1, 3)) # one bias per 3 class (rock, paper, scissors)
-
-pred, probs = predict(img, K, W, b)
-
-print("Predicted class:", pred[0])
-print("Probabilities:", probs)
-
-plt.imshow(img[0, 0], cmap='gray')
-plt.title(f"Prediction: {pred[0]}")
-plt.axis('off')
-plt.show()
-"""
-
-
