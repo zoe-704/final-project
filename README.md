@@ -61,7 +61,7 @@ python train.py --lr 0.0005 --resume --samples_per_class 500
 
 Runs 30 epochs at `lr=0.0005`, sampling up to 500 images per class per epoch. Use `--resume` to continue from a saved `model.pkl`.
 
-> **Note:** Use `--epochs xyz` to change the number of epochs. Each training run takes approximately 10–12 hours.
+> **Note:** Use `--epochs n` to change the number of epochs. Each training run takes approximately 10–12 hours.
 
 ### 3. Play the game
 
