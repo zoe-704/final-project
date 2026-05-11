@@ -113,6 +113,6 @@ A compatible dataset can be found on Kaggle (search: "rock paper scissors datase
 
 ## Notes & Known Limitations
 
-- Inference is slow (~1–3 fps) because pure NumPy convolutions are not optimized. This is intentional — the goal was to understand the math, not maximize speed.
-- The model is sensitive to lighting and background. For best results, use a plain background with good, even lighting.
-- The AI opponent picks randomly — the neural network is only used for gesture recognition, not strategy.
+- Inference is slow (~1–3 fps) because pure NumPy convolutions are not optimized since the goal of this final project was to understand the math rather than maximize speed.
+- The model is sensitive to lighting and background. For best results, use a plain background with bright, even lighting.
+- The AI opponent picks randomly. CNN is only used for gesture recognition, not strategy although that is a potential next step.
